@@ -180,7 +180,7 @@ proc str2d_replace_char_at_yx { data_dict y x new_char } {
         if {$ln_cnt == "info"} { continue }
         if {$ln_cnt == $y} {
             set new_str [string replace $in_str $x $x $new_char]
-            puts " in_str {$in_str}\nnew_str {$new_str}"
+            #puts " in_str {$in_str}\nnew_str {$new_str}"
             dict set data_dict $ln_cnt $new_str
             break
         }
@@ -188,7 +188,19 @@ proc str2d_replace_char_at_yx { data_dict y x new_char } {
     return $data_dict
 }
 proc is_obstruction { in_char {obstruction_char "#"} } {
-    if {$in_char == $obstruction_char} {
+    if {$in_char == $obstruction_char || $in_char == "O"} {
+        return 1
+    }
+    return -1
+}
+proc is_guard { in_char {guard_char "^"} } {
+    if {$in_char == $guard_char} {
+        return 1
+    }
+    return -1
+}
+proc is_guard_or_obs { in_char } {
+    if {[is_obstruction $in_char] != -1 || [is_guard $in_char] != -1} {
         return 1
     }
     return -1
@@ -236,7 +248,7 @@ proc guard_move_next_direction { data_dict {move_direction ""} {guard_prev_step_
         set move_direction $default_first_direction
     }
     set move_direction_exists [str2d_find_char_yx $data_dict $move_direction]
-    puts "move_direction_exists {$move_direction_exists}"
+    #puts "move_direction_exists {$move_direction_exists}"
     # Punt if this direction is not in the map
     if {$move_direction_exists == -1} { return [list $next_direction $move_status -1]}
 
@@ -254,7 +266,7 @@ proc guard_move_next_direction { data_dict {move_direction ""} {guard_prev_step_
     } else {
         set next_direction -1; set move_x "INVALID_MOVE_X"; set move_y "INVALID_MOVE_Y"
     }
-    puts "move_direction {$move_direction} next_direction {$next_direction}"
+    #puts "move_direction {$move_direction} next_direction {$next_direction}"
     # Punt if next_direction is invalid 
     if {$next_direction == -1} {
         return [list $next_direction $move_status -1]
@@ -264,7 +276,7 @@ proc guard_move_next_direction { data_dict {move_direction ""} {guard_prev_step_
     set current_y [lindex $move_direction_exists 0]
     set current_x [lindex $move_direction_exists 1]
     set current_step [str2dlookup_yx $data_dict $current_y $current_x]
-    puts "current_step {$current_step} current_y {$current_y} current_x {$current_x} {[is_obstruction $current_step]}"
+    #puts "current_step {$current_step} current_y {$current_y} current_x {$current_x} {[is_obstruction $current_step]}"
     set max_iterations 100000000000000
     set curr_iter 0
     while {[is_obstruction $current_step] == -1 && $current_step != -1 && $curr_iter < $max_iterations} {
@@ -281,7 +293,7 @@ proc guard_move_next_direction { data_dict {move_direction ""} {guard_prev_step_
         incr current_y $move_y
         incr current_x $move_x
         set current_step [str2dlookup_yx $data_dict $current_y $current_x]
-        puts "curr_iter {$curr_iter} current_step {$current_step} current_y {$current_y} current_x {$current_x} {[is_obstruction $current_step]}"
+        #puts "curr_iter {$curr_iter} current_step {$current_step} current_y {$current_y} current_x {$current_x} {[is_obstruction $current_step]}"
         incr curr_iter
         # Punt if current_step is -1 (This shouldn't happen in a valid map but just in case)
         #if {$current_step == -1} {
@@ -317,8 +329,6 @@ proc guard_move { data_dict {max_iterations 10000000}} {
     #    Note: if any elements before the Dict in the list are -1, then don't look at Dict :-)
     set move_status 0
     set next_direction ""
-    #set max_iterations 10000000
-    #set max_iterations 10
     set curr_iter 0
     while {$move_status != -1 && $curr_iter < $max_iterations} {
         set status [guard_move_next_direction $data_dict $next_direction]
@@ -327,5 +337,179 @@ proc guard_move { data_dict {max_iterations 10000000}} {
         set data_dict [lindex $status 2]
         incr curr_iter
     }
+    if {$curr_iter == $max_iterations} {
+        puts "guard_move: max_iterations reached! Stuck in a loop!"
+        dict set data_dict info op_results [list {guard_move} [list max_iterations_reached]]
+    }
+    if {$move_status == -1} {
+        puts "guard_move: Hit a wall!"
+        dict set data_dict info op_results [list {guard_move} [list hit_a_wall]]
+    }
     return $data_dict
+}
+proc place_obstruction { data_dict y x {obs_char "O"}} {
+    # Input:
+    #   Dict
+    #   y x -> Location to place obs
+    # Output: [list 
+    #   status (1 - Successfully placed obs at y,x) or (2 - Successfuly placed obs at obs_y,obs_x) or (-1 failed to place obs)
+    #   obs_y (=y if that location worked, otherwise new location. -1 if failed) 
+    #   obs_x (=x if that location worked, otherwise new location. -1 if failed) 
+    #   Updated Dict]
+
+    # Place a new obstruction at this location. Go to the next location
+    # if this location is 
+    #   1) Already an obstruction 2) Starting position of the guard "^"
+    set obs_y -1
+    set obs_x -1
+    set status -1
+    set max_iterations [string length [str2d_str $data_dict]]
+    set curr_iter 0
+    set current_y $y
+    set current_x $x
+    # Punt if current_y/x is out of bounds
+    set current_step [str2dlookup_yx $data_dict $current_y $current_x]
+    set current_step_is_obs [is_guard_or_obs $current_step]
+    #puts "curr_iter {$curr_iter} current_step {$current_step} current_y {$current_y} current_x {$current_x} current_step_is_obs {$current_step_is_obs}"
+    if {$current_step == -1} {
+        return [list $status $obs_y $obs_x -1]
+    }
+    # If not out of bound, then is it an obstruction?
+    if {$current_step_is_obs == 1} {
+        # Find the next non-obs location
+        set max_lines [dict get $data_dict info max_lines]
+        #puts "max_lines {$max_lines}"
+        for {set current_y $current_y} {$current_y < $max_lines} {incr current_y} {
+            set max_x [dict get $data_dict info strlen $current_y]
+            #puts " max_x {$max_x}"
+            for {set current_x $current_x} {$current_x < $max_x} {incr current_x} {
+                set current_step [str2dlookup_yx $data_dict $current_y $current_x]
+                set current_step_is_obs [is_guard_or_obs $current_step]
+                #puts "  curr_iter {$curr_iter} current_step {$current_step} current_y {$current_y} current_x {$current_x} current_step_is_obs {$current_step_is_obs}"
+                # Stop when go out of bound or not an obstruction
+                if {$current_step == -1 || $current_step_is_obs == -1} {
+                    break
+                }
+            }
+            # Stop when go out of bound or not an obstruction
+            if {$current_step == -1 || $current_step_is_obs == -1} {
+                break
+            }
+        }
+    }
+    # Punt if couldn't Find the next non-obs location
+    # Punt if went out of bounds
+    if {$current_step == -1} {
+        return [list $status $obs_y $obs_x -1]
+    }
+    # Punt if still on obs
+    if {$current_step_is_obs != -1} {
+        return [list $status $obs_y $obs_x -1]
+    }
+    # Found a non-obs spot where obs can be placed
+    # Because of earlier checks, this should never be -1, but just in case ..
+    set status2 [str2d_replace_char_at_yx $data_dict $current_y $current_x $obs_char]
+    if {$status2 == -1} {
+        puts "FATALERROR: place_obstruction: Unexpected error, needs triage!"
+        return [list $status $obs_y $obs_x -1]
+    }
+    set obs_y $current_y
+    set obs_x $current_x
+    if {$y == $current_y && $x == $current_x} {
+        set status 1
+    } else {
+        set status 2
+    }
+    return [list $status $obs_y $obs_x $status2]
+}
+proc part2_soln { data_dict {max_iterations ""} {start_y 0} {start_x 0} {obs_char "O"}} {
+    # max_iterations or maximum number of steps is the character length of the map (conservatively)
+    # because there are obstructions which will reduce the number of steps, and then eventually 
+    # the guard will step outside the map.
+    # ASSUMPTION: Conservatively, we will assume that the maximum number of steps the guard will take is 
+    # not more than the max_iterations.
+    # ASSUMPTION 2: If there is a new obstruction placed any where, and the guard gets 
+    # stuck in a loop, when the loop number of steps reaches max_iterations, then we know that the 
+    # guard is stuck in a loop. ALTERNATIVELY if the guard steps outside the map before max_iterations
+    # then the new obstructions is not working!
+    # Keep saving the location of the new obstructions until we run out of the map. 
+    # Output: RETURN the COUNT of the new obstruction locations
+
+    # Save the original data_dict which will get walked thru & new obstruction is added
+    # at each location to evaluate the results
+    set orig_data_dict $data_dict
+
+    # Calculate max_iterations if not given
+    if {$max_iterations == ""} {
+        set max_iterations [string length [str2d_str $data_dict]]
+        puts "max_iterations {$max_iterations}"
+    }
+
+    # Start from the top-left of the map: start_y & start_x = 0
+    # Place a new obstruction at this location. Go to the next location
+    # if this location is 
+    #   1) Already an obstruction 2) Starting position of the guard "^"
+    set current_y $start_y
+    set current_x $start_x
+    set already_processed_yx [list]
+    set new_obs_locations [list]
+    set max_lines [dict get $data_dict info max_lines]
+    #puts "max_lines {$max_lines}"
+    for {set current_y $start_y} {$current_y < $max_lines} {incr current_y} {
+        set max_x [dict get $orig_data_dict info strlen $current_y]
+        #puts " max_x {$max_x} current_y {$current_y}"
+        for {set current_x $start_x} {$current_x < $max_x} {incr current_x} {
+            #puts "  current_y {$current_y} current_x {$current_x}"
+            set place_obs_res [place_obstruction $orig_data_dict $current_y $current_x]
+            #puts "place_obs_res {$place_obs_res}"
+            lassign $place_obs_res status obs_y obs_x obs_data_dict
+            #puts "status {$status} obs_y {$obs_y} obs_x {$obs_x} obs_data_dict {$obs_data_dict}"
+            # Punt if anything went wrong!
+            if {$status == -1} {
+                # Need to understand why return -1 is not working?!? 
+                continue
+                return -1
+            }
+            # Go to the next location if this has been previsouly processed!
+            if {[lsearch -exact $already_processed_yx "$obs_y $obs_x"] != -1} {
+                puts "SKIPPING previously processed location: {$obs_y $obs_y}"
+                continue
+            }
+            lappend already_processed_yx [list $obs_y $obs_x]
+            # Process this location
+            #set data_dict $obs_data_dict
+            #puts "PROCESSING location: {$obs_y $obs_x} already_processed_yx {$already_processed_yx}"
+            puts "PROCESSING location: {$obs_y $obs_x}"
+            #puts "str2d_str: {\n[str2d_str $obs_data_dict]}"
+            set data_dict_res [guard_move $obs_data_dict $max_iterations]
+            set op_results [dict get $data_dict_res info op_results]
+            lassign $op_results operation op_output
+            if {$op_output == "max_iterations_reached"} {
+                # Stuck in a loop!
+                lappend new_obs_locations [list $obs_y $obs_x]
+            } elseif {$op_output == "hit_a_wall"} {
+                # Hit a wall!
+            } else {
+                # Something unexpected happened!
+                puts "FATALERROR: part2_soln: Unexpected error, needs triage!"
+            }
+            #break
+        }
+        #break
+    }
+    # Print new map with obstructions
+    if {[llength $new_obs_locations] != 0} {
+        set print_obs $orig_data_dict
+        foreach obs_yx $new_obs_locations {
+            lassign $obs_yx obs_y obs_x
+            set status2 [str2d_replace_char_at_yx $print_obs $obs_y $obs_x $obs_char]
+            if {$status2 == -1} {
+                puts "FATALERROR: part2_soln: Another Unexpected error, needs triage!"
+            }
+            set print_obs $status2
+        }
+        puts "str2d_str: {\n[str2d_str $print_obs]}"
+    }
+    puts "{[llength $new_obs_locations]} new_obs_locations {$new_obs_locations}"
+    return [llength $new_obs_locations]
 }
